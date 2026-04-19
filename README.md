@@ -1,6 +1,8 @@
 # Crunchyroll QOL Improvements
 
-Chrome extension that lets `Enter` activate Crunchyroll skip controls when they are visible on episode watch pages and can hide persistent skip buttons after a configurable delay.
+Chrome extension that adds quality-of-life controls for Crunchyroll watch pages, including skip keybinds, Auto Skip controls, and persistent skip-button hiding.
+
+Repository: [612aidan/Crunchyroll-QOL-Improvements](https://github.com/612aidan/Crunchyroll-QOL-Improvements)
 
 ## Behavior
 
@@ -11,14 +13,32 @@ Chrome extension that lets `Enter` activate Crunchyroll skip controls when they 
 - Includes a popup menu with saved settings
 - Can use left, right, and space to forward playback controls to the player even when it is not selected
 - Can hide persistent `Skip Intro`, `Skip Recap`, and `Skip Credits` buttons after a configurable delay
-- Logs detailed debug checkpoints to DevTools during diagnosis
+- Can automatically skip `Recap`, `Intro`, and `Credits` independently
+- Can delay Auto Skip with a shared countdown, including `0` for instant skip
+- Can pause the Auto Skip countdown while playback is paused
+- Can cancel the active Auto Skip countdown by hovering the skip button and clicking `Cancel Auto Skip`
+- Can disable Auto Skip for a specific series from the popup
 
 ## Settings
 
-- `Enable Enter To Skip`: On by default
-- `Enable Global Playback Keys`: On by default
 - `Hide Persistent Skip Buttons`: On by default
 - `Hide After Seconds`: `7` by default
+- `Auto Skip Recap`: Off by default
+- `Auto Skip Intro`: Off by default
+- `Auto Skip Credits`: Off by default
+- `Auto Skip Delay`: `3` by default and supports `0` for instant skip
+- `Series Blacklist`: Per-series Auto Skip toggle for the currently open Crunchyroll watch page
+- `Enable Enter To Skip Keybind`: On by default
+- `Enable Playback Keybinds`: On by default
+- `Enable Debug Logging`: Off by default
+
+The `Series Blacklist` control appears in the popup when the active tab is a Crunchyroll watch page with detectable series information.
+
+The Auto Skip countdown:
+- Applies separately to recap, intro, and credits based on which toggles are enabled
+- Pauses when the video is paused
+- Cancels if the user explicitly cancels the active Auto Skip button
+- Resets when playback position changes or the skip-button context changes
 
 The extension popup saves settings immediately with `chrome.storage.sync`, so changes apply to open Crunchyroll tabs without reloading.
 
@@ -35,21 +55,10 @@ It also falls back to other visible controls containing the word `skip`, while a
 ## Debugging
 
 - Reload the unpacked extension after changes in `chrome://extensions`
+- Turn on `Enable Debug Logging` in the popup before checking DevTools output
 - Open DevTools on a Crunchyroll watch page and filter for `[Crunchyroll Skip Debug]`
-- Use `window.crunchyrollSkipDebug.version` to confirm the latest debug build is loaded
-- Use `window.crunchyrollSkipDebug.settings()` to inspect the current extension settings on the page
-- Use `window.crunchyrollSkipDebug.focusState()` to inspect whether the page currently has focus
-- Use `window.crunchyrollSkipDebug.inspect()` to print the current skip candidate analysis
-- Use `window.crunchyrollSkipDebug.trySkip()` to manually run the same skip activation path without pressing `Enter`
 
 ## Install
 
-1. Open `chrome://extensions`
-2. Turn On `Developer Mode`
-3. Click `Load Unpacked`
-4. Select this folder:
-   `/Users/aidan/Library/CloudStorage/Dropbox/[01] Aidan/[02] Personal Projects/[12] Chrome Extensions/Crunchyroll Enter to Skip Intro`
-
-## Notes
-
-Crunchyroll can change its player markup over time. This extension prefers stable text and ARIA labels over brittle utility classes so it is more resilient to layout changes.
+- GitHub repository: [612aidan/Crunchyroll-QOL-Improvements](https://github.com/612aidan/Crunchyroll-QOL-Improvements)
+- Clone or download the repo, then load the extension unpacked from `chrome://extensions`

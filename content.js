@@ -4,7 +4,11 @@
     enterToSkipEnabled: true,
     globalPlaybackKeysEnabled: true,
     hidePersistentSkipButtonsEnabled: true,
-    hidePersistentSkipButtonsAfterSeconds: 7
+    hidePersistentSkipButtonsAfterSeconds: 7,
+    autoSkipRecapEnabled: false,
+    autoSkipIntroEnabled: false,
+    autoSkipCreditsEnabled: false,
+    autoSkipDelaySeconds: 3
   };
 
   const VERSION = "1.0";
@@ -31,14 +35,22 @@
     "skip ad",
     "skip ads"
   ];
+  const SKIP_TYPE_BY_LABEL = Object.freeze({
+    "skip intro": "intro",
+    "skip recap": "recap",
+    "skip credits": "credits"
+  });
+  const SKIP_TYPE_TITLES = Object.freeze({
+    intro: "Intro",
+    recap: "Recap",
+    credits: "Credits"
+  });
   const PERSISTENT_HIDE_LABELS = new Set([
     "skip intro",
     "skip recap",
     "skip credits"
   ]);
   const DEBUG_PREFIX = "[Crunchyroll Skip Debug]";
-  const DEBUG_REQUEST_EVENT = "crunchyroll-skip-debug-request";
-  const DEBUG_RESPONSE_EVENT = "crunchyroll-skip-debug-response";
   const KEY_EVENTS = ["keydown", "keyup", "keypress"];
   const PLAYBACK_KEY_CODES = new Set([
     "ArrowLeft",
@@ -49,8 +61,10 @@
   const HIDDEN_ATTRIBUTE = "data-crunchyroll-skip-hidden";
   const HIDDEN_LABEL_ATTRIBUTE = "data-crunchyroll-skip-hidden-label";
   const HIDDEN_STYLE_ID = "crunchyroll-skip-hidden-style";
+  const SERIES_LINK_PATH_FRAGMENT = "/series/";
   const MAINTENANCE_INTERVAL_MS = 500;
   const REWIND_THRESHOLD_SECONDS = 2;
+  const SEEK_RESET_THRESHOLD_SECONDS = 0.25;
   const HIDE_FADE_DURATION_MS = 220;
 
   let currentSettings = { ...DEFAULT_SETTINGS };
@@ -62,8 +76,19 @@
   let lastKnownVideoTime = null;
   let removeTrackedVideoListeners = null;
   let trackedWatchPathname = null;
+  let activeAutoSkip = null;
+  let canceledAutoSkip = null;
+  let currentSeriesContext = null;
+
+  function isDebugLoggingEnabled() {
+    return Boolean(currentSettings.debugLoggingEnabled);
+  }
 
   function log(stage, message, details) {
+    if (!isDebugLoggingEnabled()) {
+      return;
+    }
+
     if (typeof details === "undefined") {
       console.log(`${DEBUG_PREFIX} [${stage}] ${message}`);
       return;
@@ -73,6 +98,10 @@
   }
 
   function warn(stage, message, details) {
+    if (!isDebugLoggingEnabled()) {
+      return;
+    }
+
     if (typeof details === "undefined") {
       console.warn(`${DEBUG_PREFIX} [${stage}] ${message}`);
       return;
@@ -82,6 +111,10 @@
   }
 
   function error(stage, message, details) {
+    if (!isDebugLoggingEnabled()) {
+      return;
+    }
+
     if (typeof details === "undefined") {
       console.error(`${DEBUG_PREFIX} [${stage}] ${message}`);
       return;
@@ -185,12 +218,20 @@
       return "";
     }
 
-    return (
-      element.getAttribute("aria-label") ||
+    const visibleText = (
       element.innerText ||
       element.textContent ||
       ""
     )
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+
+    if (visibleText) {
+      return visibleText;
+    }
+
+    return (element.getAttribute("aria-label") || "")
       .replace(/\s+/g, " ")
       .trim()
       .toLowerCase();
@@ -224,6 +265,443 @@
 
   function getNaturalLabel(element) {
     return withTemporarilyRevealed(element, () => getLabel(element));
+  }
+
+  function normalizeSeriesTitle(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+
+    return value.replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeSeriesPath(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+
+    const match = value.match(/\/series\/[^/?#]+/i);
+    return match ? match[0].toLowerCase() : "";
+  }
+
+  function buildSeriesContext(title, path) {
+    const normalizedTitle = normalizeSeriesTitle(title);
+    const normalizedPath = normalizeSeriesPath(path);
+
+    if (!normalizedTitle && !normalizedPath) {
+      return null;
+    }
+
+    const key = normalizedPath || `title:${normalizedTitle.toLowerCase()}`;
+    const displayTitle = normalizedTitle || normalizedPath.replace("/series/", "").replace(/-/g, " ");
+
+    return {
+      key,
+      title: displayTitle
+    };
+  }
+
+  function extractSeriesContextFromJsonLd() {
+    const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+
+    for (const script of scripts) {
+      const rawText = script.textContent || "";
+
+      if (!rawText.trim()) {
+        continue;
+      }
+
+      try {
+        const parsed = JSON.parse(rawText);
+        const queue = Array.isArray(parsed) ? [...parsed] : [parsed];
+
+        while (queue.length > 0) {
+          const current = queue.shift();
+
+          if (!current || typeof current !== "object") {
+            continue;
+          }
+
+          if (Array.isArray(current)) {
+            queue.push(...current);
+            continue;
+          }
+
+          const partOfSeries = current.partOfSeries;
+          if (partOfSeries && typeof partOfSeries === "object") {
+            const seriesContext = buildSeriesContext(
+              partOfSeries.name || partOfSeries.alternateName || "",
+              partOfSeries.url || partOfSeries["@id"] || ""
+            );
+
+            if (seriesContext) {
+              return seriesContext;
+            }
+          }
+
+          if (current["@type"] === "TVSeries" || current["@type"] === "Series") {
+            const seriesContext = buildSeriesContext(
+              current.name || current.alternateName || "",
+              current.url || current["@id"] || ""
+            );
+
+            if (seriesContext) {
+              return seriesContext;
+            }
+          }
+
+          for (const value of Object.values(current)) {
+            if (value && typeof value === "object") {
+              queue.push(value);
+            }
+          }
+        }
+      } catch (error) {
+        log("series", "Skipping invalid JSON-LD payload", {
+          error: String(error)
+        });
+      }
+    }
+
+    return null;
+  }
+
+  function extractSeriesContextFromLinks() {
+    const candidates = Array.from(document.querySelectorAll('a[href*="/series/"]'));
+
+    for (const element of candidates) {
+      const href = element.getAttribute("href") || "";
+      const title = normalizeSeriesTitle(element.textContent || element.getAttribute("aria-label") || "");
+      const seriesContext = buildSeriesContext(title, href);
+
+      if (seriesContext) {
+        return seriesContext;
+      }
+    }
+
+    return null;
+  }
+
+  function extractCurrentSeriesContext() {
+    if (!isWatchPage()) {
+      return null;
+    }
+
+    return (
+      extractSeriesContextFromJsonLd() ||
+      extractSeriesContextFromLinks()
+    );
+  }
+
+  function syncCurrentSeriesContext(source) {
+    const nextSeriesContext = extractCurrentSeriesContext();
+    const currentKey = currentSeriesContext ? currentSeriesContext.key : null;
+    const nextKey = nextSeriesContext ? nextSeriesContext.key : null;
+
+    if (currentKey === nextKey) {
+      return currentSeriesContext;
+    }
+
+    currentSeriesContext = nextSeriesContext;
+
+    log("series", "Updated current series context", {
+      source,
+      seriesContext: currentSeriesContext
+    });
+
+    return currentSeriesContext;
+  }
+
+  function isCurrentSeriesBlacklisted() {
+    if (!currentSeriesContext || !currentSeriesContext.key) {
+      return false;
+    }
+
+    return Boolean(
+      currentSettings.autoSkipSeriesBlacklist &&
+      currentSettings.autoSkipSeriesBlacklist[currentSeriesContext.key]
+    );
+  }
+
+  function getSkipType(label) {
+    return SKIP_TYPE_BY_LABEL[label] || null;
+  }
+
+  function hasAnyAutoSkipEnabled() {
+    return (
+      currentSettings.autoSkipRecapEnabled ||
+      currentSettings.autoSkipIntroEnabled ||
+      currentSettings.autoSkipCreditsEnabled
+    );
+  }
+
+  function isAutoSkipEnabledForType(type) {
+    if (type === "recap") {
+      return currentSettings.autoSkipRecapEnabled;
+    }
+
+    if (type === "intro") {
+      return currentSettings.autoSkipIntroEnabled;
+    }
+
+    if (type === "credits") {
+      return currentSettings.autoSkipCreditsEnabled;
+    }
+
+    return false;
+  }
+
+  function formatAutoSkipCountdown(type, remainingSeconds) {
+    return `Skipping ${SKIP_TYPE_TITLES[type]} in ${remainingSeconds}...`;
+  }
+
+  function rememberCanceledAutoSkip(state) {
+    canceledAutoSkip = {
+      element: state.element,
+      type: state.type,
+      label: state.originalLabel
+    };
+  }
+
+  function clearCanceledAutoSkipIfStale(chosen) {
+    if (
+      canceledAutoSkip &&
+      (!chosen ||
+        canceledAutoSkip.element !== chosen.element ||
+        canceledAutoSkip.type !== chosen.skipType ||
+        canceledAutoSkip.label !== chosen.label)
+    ) {
+      canceledAutoSkip = null;
+    }
+  }
+
+  function isCanceledAutoSkipCandidate(candidate) {
+    return Boolean(
+      canceledAutoSkip &&
+      candidate &&
+      canceledAutoSkip.element === candidate.element &&
+      canceledAutoSkip.type === candidate.skipType &&
+      canceledAutoSkip.label === candidate.label
+    );
+  }
+
+  function formatAutoSkipHoverCancelLabel() {
+    return "Cancel Auto Skip";
+  }
+
+  function isRenderedAutoSkipLabel(label) {
+    return label.startsWith("skipping ") || label === "cancel auto skip";
+  }
+
+  function findAutoSkipTextTarget(element) {
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+
+    const walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          if (!(node instanceof Text) || !node.parentElement) {
+            return NodeFilter.FILTER_REJECT;
+          }
+
+          const value = (node.textContent || "").replace(/\s+/g, " ").trim();
+          if (!value) {
+            return NodeFilter.FILTER_REJECT;
+          }
+
+          return NodeFilter.FILTER_ACCEPT;
+        }
+      }
+    );
+
+    let bestNode = null;
+    let currentNode = walker.nextNode();
+
+    while (currentNode) {
+      bestNode = currentNode;
+      currentNode = walker.nextNode();
+    }
+
+    return bestNode;
+  }
+
+  function renderAutoSkipCountdown(state, remainingSeconds) {
+    if (!(state && state.element instanceof HTMLElement && state.element.isConnected)) {
+      return;
+    }
+
+    const nextText = state.hovered
+      ? formatAutoSkipHoverCancelLabel()
+      : formatAutoSkipCountdown(state.type, remainingSeconds);
+    if (state.lastRenderedText === nextText) {
+      return;
+    }
+
+    if (state.textTarget instanceof Text && state.textTarget.isConnected) {
+      state.textTarget.textContent = nextText;
+    } else {
+      state.element.textContent = nextText;
+    }
+
+    state.lastRenderedText = nextText;
+
+    log("auto-skip", "Rendered countdown label", {
+      type: state.type,
+      remainingSeconds,
+      element: describeElement(state.element)
+    });
+  }
+
+  function clearActiveAutoSkip(reason, details, options) {
+    if (!activeAutoSkip) {
+      return;
+    }
+
+    const nextOptions = options || {};
+    const state = activeAutoSkip;
+    activeAutoSkip = null;
+
+    if (state.element instanceof HTMLElement) {
+      if (state.handleMouseEnter) {
+        state.element.removeEventListener("mouseenter", state.handleMouseEnter, true);
+      }
+
+      if (state.handleMouseLeave) {
+        state.element.removeEventListener("mouseleave", state.handleMouseLeave, true);
+      }
+
+      if (state.handleMouseDown) {
+        state.element.removeEventListener("mousedown", state.handleMouseDown, true);
+      }
+
+      if (state.handleClick) {
+        state.element.removeEventListener("click", state.handleClick, true);
+      }
+    }
+
+    if (nextOptions.restoreOriginalMarkup && state.element instanceof HTMLElement && state.element.isConnected) {
+      const currentLabel = getLabel(state.element);
+      const shouldRestoreOriginalMarkup = isRenderedAutoSkipLabel(currentLabel) || (
+        typeof state.lastRenderedText === "string" &&
+        currentLabel === state.lastRenderedText.toLowerCase()
+      );
+
+      if (shouldRestoreOriginalMarkup) {
+        state.element.innerHTML = state.originalInnerHTML;
+      }
+    }
+
+    log("auto-skip", "Countdown cleared", {
+      reason,
+      type: state.type,
+      ...details
+    });
+  }
+
+  function startAutoSkipCountdown(candidate, type, source) {
+    if (!(candidate && candidate.element instanceof HTMLElement)) {
+      return;
+    }
+
+    clearActiveAutoSkip("starting new countdown", {
+      source,
+      nextType: type
+    });
+
+    activeAutoSkip = {
+      element: candidate.element,
+      type,
+      originalLabel: candidate.label,
+      originalInnerHTML: candidate.element.innerHTML,
+      textTarget: findAutoSkipTextTarget(candidate.element),
+      deadlineMs: Date.now() + currentSettings.autoSkipDelaySeconds * 1000,
+      remainingMs: currentSettings.autoSkipDelaySeconds * 1000,
+      paused: false,
+      hovered: false,
+      lastRenderedText: null
+    };
+
+    if (currentSettings.autoSkipDelaySeconds === 0) {
+      log("auto-skip", "Instant Auto Skip triggered", {
+        source,
+        type,
+        candidate: candidate.summary
+      });
+      clearActiveAutoSkip("instant auto skip", {
+        source,
+        type
+      });
+      activateCandidate(candidate, `auto-skip:${source}`);
+      return;
+    }
+
+    activeAutoSkip.handleMouseEnter = () => {
+      if (!activeAutoSkip || activeAutoSkip.element !== candidate.element) {
+        return;
+      }
+
+      activeAutoSkip.hovered = true;
+      renderAutoSkipCountdown(
+        activeAutoSkip,
+        Math.max(1, Math.ceil(activeAutoSkip.remainingMs / 1000))
+      );
+    };
+
+    activeAutoSkip.handleMouseLeave = () => {
+      if (!activeAutoSkip || activeAutoSkip.element !== candidate.element) {
+        return;
+      }
+
+      activeAutoSkip.hovered = false;
+      renderAutoSkipCountdown(
+        activeAutoSkip,
+        Math.max(1, Math.ceil(activeAutoSkip.remainingMs / 1000))
+      );
+    };
+
+    activeAutoSkip.handleMouseDown = (event) => {
+      if (!activeAutoSkip || activeAutoSkip.element !== candidate.element || !activeAutoSkip.hovered) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    };
+
+    activeAutoSkip.handleClick = (event) => {
+      if (!activeAutoSkip || activeAutoSkip.element !== candidate.element || !activeAutoSkip.hovered) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      rememberCanceledAutoSkip(activeAutoSkip);
+      clearActiveAutoSkip("user canceled auto skip", {
+        source,
+        type
+      }, {
+        restoreOriginalMarkup: true
+      });
+    };
+
+    candidate.element.addEventListener("mouseenter", activeAutoSkip.handleMouseEnter, true);
+    candidate.element.addEventListener("mouseleave", activeAutoSkip.handleMouseLeave, true);
+    candidate.element.addEventListener("mousedown", activeAutoSkip.handleMouseDown, true);
+    candidate.element.addEventListener("click", activeAutoSkip.handleClick, true);
+
+    renderAutoSkipCountdown(activeAutoSkip, currentSettings.autoSkipDelaySeconds);
+
+    log("auto-skip", "Countdown started", {
+      source,
+      type,
+      delaySeconds: currentSettings.autoSkipDelaySeconds,
+      candidate: candidate.summary
+    });
   }
 
   function isNaturallyVisible(element) {
@@ -384,7 +862,15 @@
   }
 
   function evaluateCandidate(element, rootName, selector) {
-    const label = getLabel(element);
+    const detectedLabel = getLabel(element);
+    const label = (
+      activeAutoSkip &&
+      activeAutoSkip.element === element &&
+      isRenderedAutoSkipLabel(detectedLabel)
+    )
+      ? activeAutoSkip.originalLabel
+      : detectedLabel;
+    const skipType = getSkipType(label);
     const visible = isVisible(element);
     const exactMatch = SKIP_LABEL_ALLOWLIST.includes(label);
     const containsSkip = SKIP_LABEL_PATTERN.test(label);
@@ -423,6 +909,7 @@
       rootName,
       selector,
       label,
+      skipType,
       visible,
       exactMatch,
       containsSkip,
@@ -435,6 +922,7 @@
       summary: {
         ...describeElement(element),
         label,
+        skipType,
         visible,
         exactMatch,
         containsSkip,
@@ -477,18 +965,22 @@
     return evaluations;
   }
 
-  function chooseCandidate(evaluations) {
+  function chooseCandidate(evaluations, shouldLog = true) {
     const accepted = evaluations
       .filter((evaluation) => evaluation.accepted)
       .sort((left, right) => left.priority - right.priority);
 
     if (accepted.length === 0) {
-      warn("scan", "No accepted skip candidate found");
+      if (shouldLog) {
+        warn("scan", "No accepted skip candidate found");
+      }
       return null;
     }
 
     const chosen = accepted[0];
-    log("scan", "Chosen skip candidate", chosen.summary);
+    if (shouldLog) {
+      log("scan", "Chosen skip candidate", chosen.summary);
+    }
     return chosen;
   }
 
@@ -580,7 +1072,7 @@
 
   function analyzeCandidates(source) {
     const evaluations = collectCandidates();
-    const chosen = chooseCandidate(evaluations);
+    const chosen = chooseCandidate(evaluations, true);
     const accepted = evaluations
       .filter((evaluation) => evaluation.accepted)
       .map((evaluation) => evaluation.summary);
@@ -635,6 +1127,12 @@
         pathname: window.location.pathname
       });
       return false;
+    }
+
+    if (activeAutoSkip && activeAutoSkip.element === analysis.chosen.element) {
+      clearActiveAutoSkip("manual skip activated", {
+        source
+      });
     }
 
     activateCandidate(analysis.chosen, source);
@@ -844,6 +1342,16 @@
     });
   }
 
+  function resetAutoSkipState(reason, details) {
+    canceledAutoSkip = null;
+    clearActiveAutoSkip(reason, details);
+
+    log("auto-skip", "Auto Skip state reset", {
+      reason,
+      ...details
+    });
+  }
+
   function getPlayerVideoElement() {
     return document.querySelector("#player-container video, video");
   }
@@ -868,12 +1376,27 @@
     };
 
     const handleSeeking = () => {
+      const hasMeaningfulSeek =
+        typeof lastKnownVideoTime === "number" &&
+        !Number.isNaN(videoElement.currentTime) &&
+        Math.abs(videoElement.currentTime - lastKnownVideoTime) >= SEEK_RESET_THRESHOLD_SECONDS;
+
       if (
         typeof lastKnownVideoTime === "number" &&
         !Number.isNaN(videoElement.currentTime) &&
         videoElement.currentTime + REWIND_THRESHOLD_SECONDS < lastKnownVideoTime
       ) {
         resetPersistentHideState("playback rewound", {
+          source: "video-seeking",
+          from: lastKnownVideoTime,
+          to: videoElement.currentTime
+        });
+      }
+
+      if (hasMeaningfulSeek) {
+        clearCanceledAutoSkipIfStale(null);
+        canceledAutoSkip = null;
+        resetAutoSkipState("playback position changed", {
           source: "video-seeking",
           from: lastKnownVideoTime,
           to: videoElement.currentTime
@@ -915,6 +1438,9 @@
         resetPersistentHideState("video element changed", {
           source
         });
+        resetAutoSkipState("video element changed", {
+          source
+        });
       }
 
       detachTrackedVideoListeners();
@@ -942,6 +1468,9 @@
   function syncTrackedWatchPathname(source) {
     if (!isWatchPage()) {
       trackedWatchPathname = null;
+      resetAutoSkipState("left watch page", {
+        source
+      });
       return;
     }
 
@@ -959,6 +1488,11 @@
     const previousPathname = trackedWatchPathname;
 
     resetPersistentHideState("watch page changed", {
+      source,
+      from: previousPathname,
+      to: nextPathname
+    });
+    resetAutoSkipState("watch page changed", {
       source,
       from: previousPathname,
       to: nextPathname
@@ -989,6 +1523,7 @@
 
     syncTrackedWatchPathname(source);
     trackPlaybackState(source);
+    syncCurrentSeriesContext(source);
 
     const videoElement = trackedVideoElement;
 
@@ -1046,6 +1581,11 @@
         const visibleSince = visibleSinceByElement.get(element) || now;
         visibleSinceByElement.set(element, visibleSince);
 
+        if (activeAutoSkip && activeAutoSkip.element === element) {
+          visibleSinceByElement.set(element, now);
+          continue;
+        }
+
         if (now - visibleSince >= hideAfterMs) {
           hidePersistentButton(element, {
             source,
@@ -1068,6 +1608,106 @@
     }
   }
 
+  function runAutoSkipMaintenance(source) {
+    if (!isWatchPage()) {
+      clearActiveAutoSkip("no longer on watch page", {
+        source
+      });
+      return;
+    }
+
+    syncCurrentSeriesContext(source);
+
+    if (!hasAnyAutoSkipEnabled()) {
+      clearActiveAutoSkip("auto skip disabled", {
+        source
+      });
+      return;
+    }
+
+    if (isCurrentSeriesBlacklisted()) {
+      clearActiveAutoSkip("current series blacklisted", {
+        source,
+        seriesContext: currentSeriesContext
+      });
+      return;
+    }
+
+    const evaluations = [];
+
+    for (const root of getSearchRoots()) {
+      for (const entry of collectElements(root, false)) {
+        evaluations.push(evaluateCandidate(entry.element, root.name, entry.selector));
+      }
+    }
+
+    const chosen = chooseCandidate(evaluations, false);
+    clearCanceledAutoSkipIfStale(chosen);
+
+    if (!chosen || !chosen.visible || !chosen.skipType || !isAutoSkipEnabledForType(chosen.skipType)) {
+      clearActiveAutoSkip("no eligible auto skip candidate", {
+        source,
+        chosen: chosen ? chosen.summary : null
+      });
+      return;
+    }
+
+    if (isCanceledAutoSkipCandidate(chosen)) {
+      clearActiveAutoSkip("auto skip canceled for current button", {
+        source,
+        chosen: chosen.summary
+      });
+      return;
+    }
+
+    if (
+      !activeAutoSkip ||
+      activeAutoSkip.element !== chosen.element ||
+      activeAutoSkip.type !== chosen.skipType
+    ) {
+      startAutoSkipCountdown(chosen, chosen.skipType, source);
+    }
+
+    if (!activeAutoSkip) {
+      return;
+    }
+
+    const videoElement = trackedVideoElement;
+
+    if (videoElement instanceof HTMLVideoElement && videoElement.paused) {
+      if (!activeAutoSkip.paused) {
+        activeAutoSkip.remainingMs = Math.max(0, activeAutoSkip.deadlineMs - Date.now());
+        activeAutoSkip.paused = true;
+      }
+
+      renderAutoSkipCountdown(
+        activeAutoSkip,
+        Math.max(1, Math.ceil(activeAutoSkip.remainingMs / 1000))
+      );
+      return;
+    }
+
+    if (activeAutoSkip.paused) {
+      activeAutoSkip.deadlineMs = Date.now() + activeAutoSkip.remainingMs;
+      activeAutoSkip.paused = false;
+    } else {
+      activeAutoSkip.remainingMs = Math.max(0, activeAutoSkip.deadlineMs - Date.now());
+    }
+
+    const remainingSeconds = Math.max(0, Math.ceil(activeAutoSkip.remainingMs / 1000));
+
+    if (remainingSeconds <= 0) {
+      clearActiveAutoSkip("countdown completed", {
+        source,
+        type: chosen.skipType
+      });
+      activateCandidate(chosen, `auto-skip:${source}`);
+      return;
+    }
+
+    renderAutoSkipCountdown(activeAutoSkip, remainingSeconds);
+  }
+
   function startPersistentHideMaintenance() {
     if (maintenanceIntervalId !== null) {
       return;
@@ -1075,6 +1715,7 @@
 
     maintenanceIntervalId = window.setInterval(() => {
       runPersistentHideMaintenance("interval");
+      runAutoSkipMaintenance("interval");
     }, MAINTENANCE_INTERVAL_MS);
 
     log("hide", "Persistent hide maintenance started", {
@@ -1201,29 +1842,6 @@
       );
     }
 
-    window.addEventListener("focus", () => {
-      log("focus", "Window focus", describeDocumentState());
-    });
-
-    window.addEventListener("blur", () => {
-      warn("focus", "Window blur", describeDocumentState());
-    });
-
-    document.addEventListener("focusin", (event) => {
-      log("focus", "Focus moved within document", {
-        target: describeElement(event.target),
-        documentState: describeDocumentState()
-      });
-    });
-
-    document.addEventListener("visibilitychange", () => {
-      log("focus", "Visibility changed", describeDocumentState());
-    });
-
-    document.addEventListener("fullscreenchange", () => {
-      log("focus", "Fullscreen changed", describeDocumentState());
-    });
-
     log("init", "Keyboard diagnostics installed", {
       events: KEY_EVENTS,
       documentState: describeDocumentState()
@@ -1231,6 +1849,12 @@
   }
 
   function applySettings(nextSettings, source) {
+    clearActiveAutoSkip("settings changed", {
+      source
+    }, {
+      restoreOriginalMarkup: true
+    });
+
     currentSettings = {
       ...DEFAULT_SETTINGS,
       ...nextSettings
@@ -1245,10 +1869,11 @@
       resetPersistentHideState("hide persistent skip buttons disabled", {
         source
       });
-      return;
+    } else {
+      runPersistentHideMaintenance(`settings:${source}`);
     }
 
-    runPersistentHideMaintenance(`settings:${source}`);
+    runAutoSkipMaintenance(`settings:${source}`);
   }
 
   async function loadSettings() {
@@ -1302,128 +1927,18 @@
     });
   }
 
-  function handleDebugRequest(action) {
-    if (action === "settings") {
-      return {
-        version: VERSION,
-        settings: { ...currentSettings }
-      };
-    }
+  if (chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (!message || message.action !== "currentSeriesContext") {
+        return undefined;
+      }
 
-    if (action === "inspect") {
-      return inspectCandidates("page-probe");
-    }
-
-    if (action === "trySkip") {
-      return {
-        success: trySkip("page-probe"),
-        version: VERSION
-      };
-    }
-
-    return {
-      error: `Unknown action: ${action}`,
-      version: VERSION
-    };
-  }
-
-  function installPageProbe() {
-    const script = document.createElement("script");
-    script.dataset.crunchyrollSkipDebug = "true";
-    script.textContent = `
-      (() => {
-        const prefix = ${JSON.stringify(DEBUG_PREFIX)};
-        const version = ${JSON.stringify(VERSION)};
-        const requestEvent = ${JSON.stringify(DEBUG_REQUEST_EVENT)};
-        const responseEvent = ${JSON.stringify(DEBUG_RESPONSE_EVENT)};
-
-        function request(action) {
-          return new Promise((resolve) => {
-            const requestId = Math.random().toString(36).slice(2);
-
-            function onResponse(event) {
-              if (!event.detail || event.detail.requestId !== requestId) {
-                return;
-              }
-
-              document.removeEventListener(responseEvent, onResponse);
-              resolve(event.detail.payload);
-            }
-
-            document.addEventListener(responseEvent, onResponse);
-            document.dispatchEvent(new CustomEvent(requestEvent, {
-              detail: {
-                action,
-                requestId
-              }
-            }));
-          });
-        }
-
-        window.crunchyrollSkipDebug = {
-          version,
-          settings() {
-            console.log(\`\${prefix} [probe] settings() called\`, { version });
-            return request("settings").then((payload) => {
-              console.log(\`\${prefix} [probe] settings() result\`, payload);
-              return payload;
-            });
-          },
-          focusState() {
-            const state = {
-              hasFocus: document.hasFocus(),
-              visibilityState: document.visibilityState,
-              activeElement: document.activeElement ? {
-                tag: document.activeElement.tagName,
-                id: document.activeElement.id || null,
-                className: document.activeElement.className || null
-              } : null
-            };
-
-            console.log(\`\${prefix} [probe] focusState() result\`, state);
-            return state;
-          },
-          inspect() {
-            console.log(\`\${prefix} [probe] inspect() called\`, { version });
-            return request("inspect").then((payload) => {
-              console.log(\`\${prefix} [probe] inspect() result\`, payload);
-              return payload;
-            });
-          },
-          trySkip() {
-            console.log(\`\${prefix} [probe] trySkip() called\`, { version });
-            return request("trySkip").then((payload) => {
-              console.log(\`\${prefix} [probe] trySkip() result\`, payload);
-              return payload;
-            });
-          }
-        };
-
-        console.log(\`\${prefix} [probe] window.crunchyrollSkipDebug installed\`, {
-          version
-        });
-      })();
-    `;
-
-    (document.documentElement || document.head || document.body).appendChild(script);
-    script.remove();
-
-    log("init", "Page debug probe installed", {
-      version: VERSION
+      sendResponse({
+        seriesContext: syncCurrentSeriesContext("runtime-message")
+      });
+      return false;
     });
   }
-
-  document.addEventListener(DEBUG_REQUEST_EVENT, (event) => {
-    const detail = event.detail || {};
-    const payload = handleDebugRequest(detail.action);
-
-    document.dispatchEvent(new CustomEvent(DEBUG_RESPONSE_EVENT, {
-      detail: {
-        requestId: detail.requestId,
-        payload
-      }
-    }));
-  });
 
   log("init", "Content script loaded", {
     version: VERSION,
@@ -1433,7 +1948,6 @@
     readyState: document.readyState
   });
 
-  installPageProbe();
   installKeyboardDiagnostics();
   installStorageSync();
   startPersistentHideMaintenance();

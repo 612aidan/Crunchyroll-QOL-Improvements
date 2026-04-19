@@ -2,6 +2,8 @@
 
 Chrome extension that adds quality-of-life controls for Crunchyroll watch pages, including skip keybinds, Auto Skip controls, and persistent skip-button hiding.
 
+Chrome Web Store: [Crunchyroll QOL Improvements](https://chromewebstore.google.com/detail/mokalhacdbinfeikjblfenmgnefeebbd)
+
 Repository: [612aidan/Crunchyroll-QOL-Improvements](https://github.com/612aidan/Crunchyroll-QOL-Improvements)
 
 ## Behavior
@@ -60,5 +62,6 @@ It also falls back to other visible controls containing the word `skip`, while a
 
 ## Install
 
+- Chrome Web Store: [Crunchyroll QOL Improvements](https://chromewebstore.google.com/detail/mokalhacdbinfeikjblfenmgnefeebbd)
 - GitHub repository: [612aidan/Crunchyroll-QOL-Improvements](https://github.com/612aidan/Crunchyroll-QOL-Improvements)
 - Clone or download the repo, then load the extension unpacked from `chrome://extensions`

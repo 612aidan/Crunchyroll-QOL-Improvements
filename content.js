@@ -69,6 +69,7 @@
 
   let currentSettings = { ...DEFAULT_SETTINGS };
   const visibleSinceByElement = new Map();
+  const lastVisibleLabelByElement = new Map();
   const hiddenElements = new Set();
   const hiddenElementObservers = new Map();
   let maintenanceIntervalId = null;
@@ -1241,6 +1242,7 @@
     element.setAttribute(HIDDEN_LABEL_ATTRIBUTE, context.label || getLabel(element));
     hiddenElements.add(element);
     visibleSinceByElement.delete(element);
+    lastVisibleLabelByElement.delete(element);
     observeHiddenElement(element);
 
     log("hide", "Persistent skip button hidden", {
@@ -1257,6 +1259,7 @@
     disconnectHiddenElementObserver(element);
     hiddenElements.delete(element);
     visibleSinceByElement.delete(element);
+    lastVisibleLabelByElement.delete(element);
 
     if (!isExtensionHidden(element)) {
       return;
@@ -1297,6 +1300,7 @@
         disconnectHiddenElementObserver(element);
         hiddenElements.delete(element);
         visibleSinceByElement.delete(element);
+        lastVisibleLabelByElement.delete(element);
         return;
       }
 
@@ -1323,6 +1327,10 @@
   function clearVisibleSinceEntries() {
     for (const element of Array.from(visibleSinceByElement.keys())) {
       visibleSinceByElement.delete(element);
+    }
+
+    for (const element of Array.from(lastVisibleLabelByElement.keys())) {
+      lastVisibleLabelByElement.delete(element);
     }
   }
 
@@ -1546,6 +1554,7 @@
     for (const element of Array.from(visibleSinceByElement.keys())) {
       if (!element.isConnected) {
         visibleSinceByElement.delete(element);
+        lastVisibleLabelByElement.delete(element);
       }
     }
 
@@ -1565,6 +1574,7 @@
 
         if (!naturallyVisible) {
           visibleSinceByElement.delete(element);
+          lastVisibleLabelByElement.delete(element);
 
           continue;
         }
@@ -1578,7 +1588,13 @@
           continue;
         }
 
-        const visibleSince = visibleSinceByElement.get(element) || now;
+        const previousLabel = lastVisibleLabelByElement.get(element) || null;
+        const labelChanged = previousLabel !== label;
+        const visibleSince = labelChanged
+          ? now
+          : (visibleSinceByElement.get(element) || now);
+
+        lastVisibleLabelByElement.set(element, label);
         visibleSinceByElement.set(element, visibleSince);
 
         if (activeAutoSkip && activeAutoSkip.element === element) {

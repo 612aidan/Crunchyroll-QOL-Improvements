@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Crunchyroll QOL Improvements",
-  "version": "1.0",
-  "description": "Press Enter on Crunchyroll to activate visible skip controls in the player.",
+  "version": "1.0.1",
+  "description": "Crunchyroll QOL Improvements fixes several frustrating parts of the current Crunchyroll player and adds features that are hard to find in any other extension.",
   "icons": {
     "16": "icon.png",
     "32": "icon.png",

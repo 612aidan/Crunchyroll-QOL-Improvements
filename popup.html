@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Crunchyroll QOL Improvements</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <section class="panel">
+        <p class="eyebrow">Crunchyroll QOL Improvements</p>
+        <h1>Playback Settings</h1>
+        <p class="summary">Control how the extension handles Enter-to-skip and persistent skip buttons.</p>
+
+        <section class="settings-section" aria-labelledby="skip-options-heading">
+          <h2 id="skip-options-heading" class="section-title">Skip Options</h2>
+
+          <label class="setting-row" for="enterToSkipEnabled">
+            <span class="setting-copy">
+              <span class="setting-title">Enable Enter To Skip</span>
+              <span class="setting-description">Use the Enter key to activate supported skip actions on watch pages.</span>
+            </span>
+            <span class="toggle-wrap">
+              <input id="enterToSkipEnabled" name="enterToSkipEnabled" type="checkbox">
+              <span class="toggle-ui" aria-hidden="true"></span>
+            </span>
+          </label>
+
+          <label class="setting-row" for="hidePersistentSkipButtonsEnabled">
+            <span class="setting-copy">
+              <span class="setting-title">Hide Persistent Skip Buttons</span>
+              <span class="setting-description">Hide Skip Intro, Skip Recap, and Skip Credits after they stay visible for the configured delay.</span>
+            </span>
+            <span class="toggle-wrap">
+              <input id="hidePersistentSkipButtonsEnabled" name="hidePersistentSkipButtonsEnabled" type="checkbox">
+              <span class="toggle-ui" aria-hidden="true"></span>
+            </span>
+          </label>
+
+          <label class="setting-row setting-row--number" for="hidePersistentSkipButtonsAfterSeconds">
+            <span class="setting-copy">
+              <span class="setting-title">Hide After Seconds</span>
+              <span class="setting-description">Choose how long persistent skip buttons remain on screen before the extension hides them.</span>
+            </span>
+            <span class="number-wrap">
+              <input
+                id="hidePersistentSkipButtonsAfterSeconds"
+                name="hidePersistentSkipButtonsAfterSeconds"
+                type="number"
+                min="1"
+                step="1"
+                inputmode="numeric"
+              >
+            </span>
+          </label>
+        </section>
+
+        <section class="settings-section" aria-labelledby="global-keys-heading">
+          <h2 id="global-keys-heading" class="section-title">Global Keys</h2>
+
+          <label class="setting-row" for="globalPlaybackKeysEnabled">
+            <span class="setting-copy">
+              <span class="setting-title">Enable Global Playback Keys</span>
+              <span class="setting-description">Use left, right, and space to control playback even when the player is not selected.</span>
+            </span>
+            <span class="toggle-wrap">
+              <input id="globalPlaybackKeysEnabled" name="globalPlaybackKeysEnabled" type="checkbox">
+              <span class="toggle-ui" aria-hidden="true"></span>
+            </span>
+          </label>
+        </section>
+
+        <p id="saveStatus" class="save-status" aria-live="polite">Settings save automatically.</p>
+      </section>
+    </main>
+
+    <script src="settings.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

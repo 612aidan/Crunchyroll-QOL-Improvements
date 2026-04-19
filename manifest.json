@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Crunchyroll QOL Improvements",
+  "version": "1.0",
+  "description": "Press Enter on Crunchyroll to activate visible skip controls in the player.",
+  "icons": {
+    "16": "icon.png",
+    "32": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icon.png",
+      "32": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    },
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.crunchyroll.com/*",
+        "https://crunchyroll.com/*"
+      ],
+      "js": [
+        "settings.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
